@@ -1,0 +1,70 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  upload-service:
+    build: ./services/upload-service
+    environment:
+      - PORT=4001
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+      - REDIS_URL=redis://redis:6379
+      - NOTIFY_URL=http://notification-service:4003
+      - DATA_DIR=/data
+    volumes:
+      - ./data:/data
+    depends_on:
+      - rabbitmq
+      - redis
+      - notification-service
+
+  worker-service:
+    build: ./services/worker-service
+    environment:
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+      - REDIS_URL=redis://redis:6379
+      - NOTIFY_URL=http://notification-service:4003
+      - DATA_DIR=/data
+    volumes:
+      - ./data:/data
+    depends_on:
+      - rabbitmq
+      - redis
+      - notification-service
+
+  notification-service:
+    build: ./services/notification-service
+    environment:
+      - PORT=4003
+    ports:
+      - "4003:4003"
+
+  api-gateway:
+    build: ./services/api-gateway
+    environment:
+      - PORT=4000
+      - UPLOAD_SERVICE=http://upload-service:4001
+      - NOTIFY_SERVICE=http://notification-service:4003
+      - AUTH_ENABLED=false
+      - JWT_SECRET=dev-secret
+    ports:
+      - "4000:4000"
+    depends_on:
+      - upload-service
+      - notification-service
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "4004:80"
+    depends_on:
+      - api-gateway

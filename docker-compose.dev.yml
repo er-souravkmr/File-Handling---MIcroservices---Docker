@@ -1,0 +1,100 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  upload-service:
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm config set strict-ssl false && npm install && npm run dev"
+    environment:
+      - PORT=4001
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+      - REDIS_URL=redis://redis:6379
+      - NOTIFY_URL=http://notification-service:4003
+      - DATA_DIR=/data
+      - CHOKIDAR_USEPOLLING=1
+      - CHOKIDAR_INTERVAL=500
+    volumes:
+      - ./services/upload-service:/app
+      - ./data:/data
+    ports:
+      - "4001:4001"
+    depends_on:
+      - rabbitmq
+      - redis
+      - notification-service
+
+  worker-service:
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm config set strict-ssl false && npm install && npm run dev"
+    environment:
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+      - REDIS_URL=redis://redis:6379
+      - NOTIFY_URL=http://notification-service:4003
+      - DATA_DIR=/data
+      - CHOKIDAR_USEPOLLING=1
+      - CHOKIDAR_INTERVAL=500
+    volumes:
+      - ./services/worker-service:/app
+      - ./data:/data
+    depends_on:
+      - rabbitmq
+      - redis
+      - notification-service
+
+  notification-service:
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm config set strict-ssl false && npm install && npm run dev"
+    environment:
+      - PORT=4003
+      - CHOKIDAR_USEPOLLING=1
+      - CHOKIDAR_INTERVAL=500
+    volumes:
+      - ./services/notification-service:/app
+    ports:
+      - "4003:4003"
+
+  api-gateway:
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm config set strict-ssl false && npm install && npm run dev"
+    environment:
+      - PORT=4000
+      - UPLOAD_SERVICE=http://upload-service:4001
+      - NOTIFY_SERVICE=http://notification-service:4003
+      - AUTH_ENABLED=false
+      - JWT_SECRET=dev-secret
+      - CHOKIDAR_USEPOLLING=1
+      - CHOKIDAR_INTERVAL=500
+    volumes:
+      - ./services/api-gateway:/app
+    ports:
+      - "4000:4000"
+    depends_on:
+      - upload-service
+      - notification-service
+
+  frontend:
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm config set strict-ssl false && npm install && npm run dev -- --host 0.0.0.0 --port 4004"
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "4004:4004"
+    depends_on:
+      - api-gateway
+    environment:
+      - CHOKIDAR_USEPOLLING=1
+      - CHOKIDAR_INTERVAL=500
+      - VITE_API_BASE=http://127.0.0.1:4000
