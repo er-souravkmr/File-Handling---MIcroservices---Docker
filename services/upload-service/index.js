@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const express = require("express");
 const multer = require("multer");
 const amqp = require("amqplib");
@@ -14,9 +15,22 @@ const RABBITMQ_URL = process.env.RABBITMQ_URL || "amqp://rabbitmq:5672";
 const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
 const NOTIFY_URL = process.env.NOTIFY_URL || "http://notification-service:4003";
 const DATA_DIR = process.env.DATA_DIR || "/data";
+const FILE_JOBS_QUEUE = "file_jobs";
+const FILE_JOBS_QUEUE_ARGS = {
+  "x-message-ttl": 3600000,
+  "x-max-length": 1000,
+  "x-overflow": "reject-publish",
+};
 
 const app = express();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.diskStorage({ //Used DiskStorage to handle large files without buffering in memory
+    destination: (req, file, cb) => cb(null, os.tmpdir()),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 }, 
+});
+const UPLOAD_TTL = 24 * 60 * 60;
 
 const redis = new Redis(REDIS_URL);
 
@@ -29,7 +43,14 @@ let channel;
 async function connectRabbit() {
   const conn = await amqp.connect(RABBITMQ_URL);
   channel = await conn.createChannel();
-  await channel.assertQueue("file_jobs", { durable: true });
+  await channel.assertQueue(FILE_JOBS_QUEUE, {
+    durable: true,
+    arguments: FILE_JOBS_QUEUE_ARGS,
+  });
+  conn.on("error", (err) => console.error("AMQP connection error:", err));
+  conn.on("close", () => console.error("AMQP connection closed"));
+  channel.on("error", (err) => console.error("AMQP channel error:", err));
+  channel.on("close", () => console.error("AMQP channel closed"));
 }
 
 function fileDir(fileId) {
@@ -73,48 +94,74 @@ app.get("/health", (req, res) => {
 
 app.post("/upload/init", async (req, res) => {
   const { filename, totalChunks, mime } = req.body || {};
-  if (!filename || !totalChunks) {
-    return res.status(400).json({ error: "filename and totalChunks required" });
-  }
-  // console.log("upload/init", { filename, totalChunks, mime });
-  const fileId = uuidv4();
-  const meta = {
+
+  const total = parseInt(totalChunks, 10);
+  if (!filename || isNaN(total) || total <= 0)
+    return res.status(400).json({ error: "filename and valid totalChunks required" });
+
+  const fileId  = uuidv4();
+  const metaKey = `file:${fileId}`;
+  const meta    = {
     fileId,
     filename,
-    mime: mime || "application/octet-stream",
-    totalChunks: String(totalChunks),
+    mime:        mime || "application/octet-stream",
+    totalChunks: String(total),
   };
-  await redis.hset(`file:${fileId}`, meta);
-  await writeMeta(fileId, meta);
+
+  // persist to redis and disk in parallel
+  await Promise.all([
+    redis.hset(metaKey, meta).then(() => redis.expire(metaKey, UPLOAD_TTL)),
+    writeMeta(fileId, meta),
+  ]);
+
   res.json({ fileId });
 });
 
 app.post("/upload/chunk", upload.single("chunk"), async (req, res) => {
   const { fileId, chunkIndex, totalChunks } = req.body || {};
-  if (!fileId || chunkIndex === undefined || !req.file) {
-    return res
-      .status(400)
-      .json({ error: "fileId, chunkIndex and chunk file required" });
-  }
-  const dir = chunksDir(fileId);
+
+  const idx   = parseInt(chunkIndex, 10);
+  const total = parseInt(totalChunks, 10);
+
+  if (!fileId || isNaN(idx) || idx < 0 || !req.file)
+    return res.status(400).json({ error: "fileId, valid chunkIndex, and chunk file required" });
+
+  if (!isNaN(total) && (total <= 0 || idx >= total))
+    return res.status(400).json({ error: "Invalid totalChunks or chunkIndex out of range" });
+
+  const dir       = chunksDir(fileId);
+  const chunkPath = path.join(dir, String(idx));
+
   await fs.promises.mkdir(dir, { recursive: true });
-  const chunkPath = path.join(dir, String(chunkIndex));
-  if (!fs.existsSync(chunkPath)) {
-    await fs.promises.writeFile(chunkPath, req.file.buffer);
+
+  const exists = await fs.promises.access(chunkPath).then(() => true).catch(() => false);
+  if (!exists) {
+    await fs.promises.rename(req.file.path, chunkPath).catch(() =>
+      fs.promises.copyFile(req.file.path, chunkPath)
+        .then(() => fs.promises.unlink(req.file.path))
+    );
+  } else {
+    await fs.promises.unlink(req.file.path).catch(() => {}); 
   }
 
-  const metaKey = `file:${fileId}`;
-  if (totalChunks) {
-    await redis.hset(metaKey, { totalChunks: String(totalChunks) });
-  }
-  await redis.sadd(`file:${fileId}:chunks`, String(chunkIndex));
-  const received = await redis.scard(`file:${fileId}:chunks`);
-  const meta = await redis.hgetall(metaKey);
-  const total = Number(meta.totalChunks || totalChunks || 0);
+  const metaKey  = `file:${fileId}`;
+  const chunkKey = `file:${fileId}:chunks`;
 
-  await notify("upload_progress", { fileId, received, total });
 
-  res.json({ ok: true, received, total });
+  const pipeline = redis.pipeline();
+  if (!isNaN(total)) pipeline.hset(metaKey, { totalChunks: String(total) });
+  pipeline.expire(metaKey, UPLOAD_TTL);
+  pipeline.sadd(chunkKey, String(idx));
+  pipeline.expire(chunkKey, UPLOAD_TTL);
+  pipeline.scard(chunkKey);
+  const results = await pipeline.exec();
+
+  const received     = results.at(-1)[1];         
+  const meta         = await redis.hgetall(metaKey);
+  const resolvedTotal = Number(meta?.totalChunks || total || 0);
+
+  await notify("upload_progress", { fileId, received, total: resolvedTotal });
+  res.json({ ok: true, received, total: resolvedTotal });
 });
 
 app.get("/upload/status/:fileId", async (req, res) => {
@@ -151,7 +198,7 @@ app.post("/upload/complete", async (req, res) => {
     }
 
     const job = { fileId };
-    channel.sendToQueue("file_jobs", Buffer.from(JSON.stringify(job)), {
+    channel.sendToQueue(FILE_JOBS_QUEUE, Buffer.from(JSON.stringify(job)), {
       persistent: true,
     });
     await notify("processing_status", { fileId, status: "queued" });

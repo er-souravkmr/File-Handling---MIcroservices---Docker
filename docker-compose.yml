@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   redis:
     image: redis:7-alpine
@@ -67,7 +65,7 @@ services:
       - UPLOAD_SERVICE=http://upload-service:4001
       - NOTIFY_SERVICE=http://notification-service:4003
       - AUTH_ENABLED=false
-      - JWT_SECRET=${JWT_SECRET}
+      - JWT_SECRET=supersecret
     ports:
       - "4000:4000"
     depends_on:

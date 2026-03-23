@@ -64,20 +64,14 @@ export default function App() {
     return res.json();
   }
 
-  async function uploadChunkWithRetry(
-    fileId,
-    chunkIndex,
-    totalChunks,
-    chunk,
-    tries = 3,
-  ) {
+  async function uploadChunkWithRetry(fileId, chunkIndex, totalChunks, chunk, tries = 3) {
     let lastErr;
-    for (let i = 0; i < tries; i += 1) {
+    for (let i = 0; i < tries; i++) {
       try {
         return await uploadChunk(fileId, chunkIndex, totalChunks, chunk);
       } catch (err) {
         lastErr = err;
-        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+        await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, i))); // 1s, 2s, 4s
       }
     }
     throw lastErr;
@@ -86,8 +80,9 @@ export default function App() {
   async function handleUpload() {
     if (!file) return;
 
-    const chunkSize = Math.max(1, Number(chunkSizeMb || 5)) * 1024 * 1024;
+    const chunkSize   = Math.max(1, Number(chunkSizeMb || 5)) * 1024 * 1024;
     const totalChunks = Math.ceil(file.size / chunkSize);
+    const CONCURRENCY = 4;
 
     setUploadStatus("Initializing...");
     setUploadProgress(0);
@@ -96,18 +91,22 @@ export default function App() {
       const { fileId } = await initUpload(file, totalChunks);
       setUploadStatus(`Uploading ${fileId}`);
 
-      for (let i = 0; i < totalChunks; i += 1) {
-        const start = i * chunkSize;
-        const chunk = file.slice(start, start + chunkSize);
-        await uploadChunkWithRetry(fileId, i, totalChunks, chunk, 3);
-        setUploadProgress(Math.round(((i + 1) / totalChunks) * 100));
+      for (let i = 0; i < totalChunks; i += CONCURRENCY) {
+        const batch = [];
+        for (let j = i; j < Math.min(i + CONCURRENCY, totalChunks); j++) {
+          const chunk = file.slice(j * chunkSize, (j + 1) * chunkSize);
+          batch.push(uploadChunkWithRetry(fileId, j, totalChunks, chunk, 3));
+        }
+        await Promise.all(batch);
+        setUploadProgress(Math.round((Math.min(i + CONCURRENCY, totalChunks) / totalChunks) * 100));
       }
 
       await completeUpload(fileId);
       setUploadStatus(`Queued ${fileId}`);
       setDownloadId(fileId);
     } catch (err) {
-      setUploadStatus("Upload failed");
+      setUploadStatus(`Upload failed: ${err.message}`);
+      console.error(err);
     }
   }
 
@@ -124,8 +123,21 @@ export default function App() {
   //Download logic
   async function downloadChunk(fileId, index) {
     const res = await fetch(`${API}/files/${fileId}/chunk/${index}`);
-    if (!res.ok) throw new Error("chunk download failed");
+    if (!res.ok) throw new Error(`chunk ${index} failed: ${res.status}`);
     return res.arrayBuffer();
+  }
+
+  async function downloadChunkWithRetry(fileId, index, tries = 3) {
+    let lastErr;
+    for (let i = 0; i < tries; i++) {
+      try {
+        return await downloadChunk(fileId, index);
+      } catch (err) {
+        lastErr = err;
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+      }
+    }
+    throw lastErr;
   }
 
   async function downloadFile(fileId) {
@@ -133,23 +145,37 @@ export default function App() {
     if (!metaRes.ok) throw new Error("meta not found");
     const meta = await metaRes.json();
     const total = Number(meta.totalChunks || 0);
+    const CONCURRENCY = 4;
 
-    const parts = [];
-    for (let i = 0; i < total; i += 1) {
-      const buf = await downloadChunk(fileId, i);
-      parts.push(buf);
-      setDownloadProgress(Math.round(((i + 1) / total) * 100));
+    const parts = new Array(total);
+
+    for (let i = 0; i < total; i += CONCURRENCY) {
+      const batch = [];
+      for (let j = i; j < Math.min(i + CONCURRENCY, total); j++) {
+        batch.push(
+          downloadChunkWithRetry(fileId, j).then(buf => { parts[j] = buf; })
+        );
+      }
+      await Promise.all(batch);
+      setDownloadProgress(Math.round((Math.min(i + CONCURRENCY, total) / total) * 100));
     }
 
-    const blob = new Blob(parts, {
-      type: meta.mime || "application/octet-stream",
-    });
+    const blob = new Blob(parts, { type: meta.mime || "application/octet-stream" });
+
+    if (window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({ suggestedName: meta.filename || "file" });
+      const writable = await handle.createWritable();
+      for (const part of parts) await writable.write(part);
+      await writable.close();
+      return;
+    }
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = meta.filename || "file";
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   async function handleDownload() {
@@ -161,7 +187,8 @@ export default function App() {
       await downloadFile(fileId);
       setDownloadStatus("Done");
     } catch (err) {
-      setDownloadStatus("Download failed");
+      setDownloadStatus(`Download failed: ${err.message}`);
+      console.error(err);
     }
   }
 
