@@ -8,16 +8,28 @@ jobs:
   deploy:
     runs-on: self-hosted
 
+    defaults:
+      run:
+        shell: cmd
+
     steps:
+      - name: Clean workspace
+        run: |
+          if exist "%GITHUB_WORKSPACE%" rd /s /q "%GITHUB_WORKSPACE%"
+          mkdir "%GITHUB_WORKSPACE%"
+
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: false
 
       - name: Diagnostics
         run: |
-          echo "Working dir: $PWD"
+          echo Working dir: %CD%
           docker version
           docker compose version
-          ls
+          dir
 
       - name: Build Docker images
         run: docker compose build
