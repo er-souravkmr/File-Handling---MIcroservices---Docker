@@ -20,6 +20,7 @@ app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
+//For Now BroadcaSting for simplicity----
 app.post("/notify", (req, res) => {
   const { event, data } = req.body || {};
   if (!event) {

@@ -17,7 +17,9 @@ export default function App() {
 
   useEffect(() => {
     socket.on("connected", () => pushEvent("socket connected"));
-    socket.on("upload_progress", (d) => pushEvent(`upload_progress ${d.fileId} ${d.received}/${d.total}`));
+    socket.on("upload_progress", (d) =>
+      pushEvent(`upload_progress ${d.fileId} ${d.received}/${d.total}`),
+    );
     socket.on("processing_status", (d) => {
       pushEvent(`processing_status ${d.fileId} ${d.status}`);
       if (d.status === "completed") setUploadStatus(`Done ✓ ${d.fileId}`);
@@ -33,9 +35,7 @@ export default function App() {
     setEvents((prev) => [text, ...prev].slice(0, 50));
   }
 
-
   //Upload logic
-
   async function initUpload(fileToUpload, totalChunks) {
     const res = await fetch(`${API}/upload/init`, {
       method: "POST",
@@ -43,35 +43,34 @@ export default function App() {
       body: JSON.stringify({
         filename: fileToUpload.name,
         totalChunks,
-        mime: fileToUpload.type || "application/octet-stream"
-      })
+        mime: fileToUpload.type || "application/octet-stream",
+      }),
     });
     if (!res.ok) throw new Error("init failed");
     return res.json();
   }
 
-    async function uploadChunk(fileId, chunkIndex, totalChunks, chunk) {
-      const form = new FormData();
-      form.append("fileId", fileId);
-      form.append("chunkIndex", String(chunkIndex));
-      form.append("totalChunks", String(totalChunks));
-      form.append("chunk", chunk);
-      const res = await fetch(`${API}/upload/chunk`, { method: "POST", body: form });
-      if (!res.ok) throw new Error("chunk failed");
-      return res.json();
-    }
-
-  async function completeUpload(fileId) {
-    const res = await fetch(`${API}/upload/complete`, {
+  async function uploadChunk(fileId, chunkIndex, totalChunks, chunk) {
+    const form = new FormData();
+    form.append("fileId", fileId);
+    form.append("chunkIndex", String(chunkIndex));
+    form.append("totalChunks", String(totalChunks));
+    form.append("chunk", chunk);
+    const res = await fetch(`${API}/upload/chunk`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileId })
+      body: form,
     });
-    if (!res.ok) throw new Error("complete failed");
+    if (!res.ok) throw new Error("chunk failed");
     return res.json();
   }
 
-  async function uploadChunkWithRetry(fileId, chunkIndex, totalChunks, chunk, tries = 3) {
+  async function uploadChunkWithRetry(
+    fileId,
+    chunkIndex,
+    totalChunks,
+    chunk,
+    tries = 3,
+  ) {
     let lastErr;
     for (let i = 0; i < tries; i += 1) {
       try {
@@ -112,6 +111,15 @@ export default function App() {
     }
   }
 
+  async function completeUpload(fileId) {
+    const res = await fetch(`${API}/upload/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileId }),
+    });
+    if (!res.ok) throw new Error("complete failed");
+    return res.json();
+  }
 
   //Download logic
   async function downloadChunk(fileId, index) {
@@ -133,7 +141,9 @@ export default function App() {
       setDownloadProgress(Math.round(((i + 1) / total) * 100));
     }
 
-    const blob = new Blob(parts, { type: meta.mime || "application/octet-stream" });
+    const blob = new Blob(parts, {
+      type: meta.mime || "application/octet-stream",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -179,7 +189,10 @@ export default function App() {
 
         <div className="row">
           <div className="progress-wrap">
-            <div className="progress-bar" style={{ width: `${uploadProgress}%` }} />
+            <div
+              className="progress-bar"
+              style={{ width: `${uploadProgress}%` }}
+            />
           </div>
           <div className="progress-label">
             <span className="status">{uploadStatus}</span>
@@ -188,7 +201,7 @@ export default function App() {
         </div>
       </div>
 
-          <div className="card">
+      <div className="card">
         <div className="label">Download by fileId</div>
         <input
           type="text"
@@ -201,7 +214,10 @@ export default function App() {
         </div>
         <div className="row">
           <div className="progress-wrap">
-            <div className="progress-bar" style={{ width: `${downloadProgress}%` }} />
+            <div
+              className="progress-bar"
+              style={{ width: `${downloadProgress}%` }}
+            />
           </div>
           <div className="progress-label">
             <span className="status">{downloadStatus}</span>

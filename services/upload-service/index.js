@@ -43,7 +43,10 @@ function chunksDir(fileId) {
 async function writeMeta(fileId, meta) {
   const dir = fileDir(fileId);
   await fs.promises.mkdir(dir, { recursive: true });
-  await fs.promises.writeFile(path.join(dir, "meta.json"), JSON.stringify(meta));
+  await fs.promises.writeFile(
+    path.join(dir, "meta.json"),
+    JSON.stringify(meta),
+  );
 }
 
 async function readMeta(fileId) {
@@ -61,8 +64,7 @@ async function readMeta(fileId) {
 async function notify(event, data) {
   try {
     await axios.post(`${NOTIFY_URL}/notify`, { event, data });
-  } catch (err) {
-  }
+  } catch (err) {}
 }
 
 app.get("/health", (req, res) => {
@@ -74,13 +76,13 @@ app.post("/upload/init", async (req, res) => {
   if (!filename || !totalChunks) {
     return res.status(400).json({ error: "filename and totalChunks required" });
   }
-  console.log("upload/init", { filename, totalChunks, mime });
+  // console.log("upload/init", { filename, totalChunks, mime });
   const fileId = uuidv4();
   const meta = {
     fileId,
     filename,
     mime: mime || "application/octet-stream",
-    totalChunks: String(totalChunks)
+    totalChunks: String(totalChunks),
   };
   await redis.hset(`file:${fileId}`, meta);
   await writeMeta(fileId, meta);
@@ -90,7 +92,9 @@ app.post("/upload/init", async (req, res) => {
 app.post("/upload/chunk", upload.single("chunk"), async (req, res) => {
   const { fileId, chunkIndex, totalChunks } = req.body || {};
   if (!fileId || chunkIndex === undefined || !req.file) {
-    return res.status(400).json({ error: "fileId, chunkIndex and chunk file required" });
+    return res
+      .status(400)
+      .json({ error: "fileId, chunkIndex and chunk file required" });
   }
   const dir = chunksDir(fileId);
   await fs.promises.mkdir(dir, { recursive: true });
@@ -123,7 +127,7 @@ app.get("/upload/status/:fileId", async (req, res) => {
       fileId,
       totalChunks: Number(meta.totalChunks || 0),
       received,
-      count: received.length
+      count: received.length,
     });
   } catch (err) {
     res.status(404).json({ error: "not found" });
@@ -147,7 +151,9 @@ app.post("/upload/complete", async (req, res) => {
     }
 
     const job = { fileId };
-    channel.sendToQueue("file_jobs", Buffer.from(JSON.stringify(job)), { persistent: true });
+    channel.sendToQueue("file_jobs", Buffer.from(JSON.stringify(job)), {
+      persistent: true,
+    });
     await notify("processing_status", { fileId, status: "queued" });
     res.json({ ok: true, status: "queued" });
   } catch (err) {
@@ -168,11 +174,15 @@ app.get("/files/:fileId/meta", async (req, res) => {
 app.get("/files/:fileId/chunk/:index", async (req, res) => {
   const { fileId, index } = req.params;
   const chunkPath = path.join(chunksDir(fileId), String(index));
-  if (!fs.existsSync(chunkPath)) {
-    return res.status(404).json({ error: "chunk not found" });
-  }
+
   res.setHeader("Content-Type", "application/octet-stream");
-  fs.createReadStream(chunkPath).pipe(res);
+  const stream = fs.createReadStream(chunkPath);
+
+  stream.on("error", (err) => {
+    res.status(404).send("File not found");
+  });
+
+  stream.pipe(res);
 });
 
 connectRabbit()

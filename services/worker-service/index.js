@@ -49,12 +49,11 @@ async function mergeChunks(fileId, totalChunks, filename) {
 
   for (let i = 0; i < totalChunks; i += 1) {
     const chunkPath = path.join(chunksDir(fileId), String(i));
-    const data = await fs.promises.readFile(chunkPath);
     await new Promise((resolve, reject) => {
-      const ok = writeStream.write(data);
-      if (ok) return resolve();
-      writeStream.once("drain", resolve);
-      writeStream.once("error", reject);
+      const readStream = fs.createReadStream(chunkPath);
+      readStream.pipe(writeStream, { end: false });
+      readStream.once("end", resolve);
+      readStream.once("error", reject);
     });
   }
 
@@ -70,14 +69,14 @@ async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function start() {
+async function start(retries = 10) {
   let conn;
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < retries; i++) {
     try {
       conn = await amqp.connect(RABBITMQ_URL);
       break;
     } catch (err) {
-      console.log(`RabbitMQ not ready, retry ${i + 1}/10...`);
+      console.log(`RabbitMQ not ready, retry ${i + 1}/${retries}...`);
       await sleep(3000);
     }
   }
@@ -103,11 +102,15 @@ async function start() {
       await sleep(1500);
       const outputPath = await mergeChunks(fileId, total, filename);
 
-      await notify("processing_status", { fileId, status: "completed", outputPath });
+      await notify("processing_status", {
+        fileId,
+        status: "completed",
+        outputPath,
+      });
       channel.ack(msg);
     } catch (err) {
       await notify("processing_status", { fileId, status: "failed" });
-      channel.nack(msg, false, true);  
+      channel.nack(msg, false, true);
     }
   });
 }
