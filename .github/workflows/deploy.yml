@@ -19,21 +19,7 @@ jobs:
           clean: true
           persist-credentials: false
         continue-on-error: true
-
-      - name: Verify checkout
-        run: |
-          if not exist .git (
-            echo Checkout failed
-            exit /b 1
-          )
-
-      - name: Diagnostics
-        run: |
-          echo Working dir: %CD%
-          docker version
-          docker compose version
-          dir
-
+        
       - name: Build Docker images
         run: docker compose build
 
