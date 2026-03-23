@@ -9,6 +9,11 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   upload-service:
     image: node:18-alpine
@@ -28,9 +33,12 @@ services:
     ports:
       - "4001:4001"
     depends_on:
-      - rabbitmq
-      - redis
-      - notification-service
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      notification-service:
+        condition: service_started
 
   worker-service:
     image: node:18-alpine
@@ -47,9 +55,12 @@ services:
       - ./services/worker-service:/app
       - ./data:/data
     depends_on:
-      - rabbitmq
-      - redis
-      - notification-service
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      notification-service:
+        condition: service_started
 
   notification-service:
     image: node:18-alpine

@@ -11,6 +11,12 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   upload-service:
     build: ./services/upload-service
@@ -23,9 +29,12 @@ services:
     volumes:
       - ./data:/data
     depends_on:
-      - rabbitmq
-      - redis
-      - notification-service
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      notification-service:
+        condition: service_started
 
   worker-service:
     build: ./services/worker-service
@@ -37,9 +46,12 @@ services:
     volumes:
       - ./data:/data
     depends_on:
-      - rabbitmq
-      - redis
-      - notification-service
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      notification-service:
+        condition: service_started
 
   notification-service:
     build: ./services/notification-service
@@ -55,7 +67,7 @@ services:
       - UPLOAD_SERVICE=http://upload-service:4001
       - NOTIFY_SERVICE=http://notification-service:4003
       - AUTH_ENABLED=false
-      - JWT_SECRET=dev-secret
+      - JWT_SECRET=${JWT_SECRET}
     ports:
       - "4000:4000"
     depends_on:
