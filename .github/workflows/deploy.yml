@@ -1,0 +1,25 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker images
+        run: docker compose build
+
+      - name: Stop existing containers
+        run: docker compose down --remove-orphans
+
+      - name: Start services
+        run: docker compose up -d
+
+      - name: Verify services are running
+        run: docker compose ps
