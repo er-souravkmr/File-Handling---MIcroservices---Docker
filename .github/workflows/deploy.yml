@@ -13,16 +13,11 @@ jobs:
         shell: cmd
 
     steps:
-      - name: Clean workspace
-        run: |
-          if exist "%GITHUB_WORKSPACE%" rd /s /q "%GITHUB_WORKSPACE%"
-          mkdir "%GITHUB_WORKSPACE%"
-
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          clean: true
           persist-credentials: false
-          clean: false
 
       - name: Diagnostics
         run: |
